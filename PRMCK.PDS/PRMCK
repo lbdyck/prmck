@@ -46,6 +46,8 @@
  *            Internet: lbdyck'gmail.com                       *
  *                                                             *
  * History:                                                    *
+ *            05/14/20 - Correct oversight test volser syms    *
+ *                       for PROGxx                            *
  *            03/10/20 - Clean up typos                        *
  *            03/04/20 - Check for valid dsname (routine)      *
  *            11/16/18 - add var xdsnsave to check more precise*
@@ -697,6 +699,7 @@ Test_LnkLpaxx:
  * Test PROGxx member of SYS1.PARMLIB                    *
  * ----------------------------------------------------- */
 Test_Prog:
+  call fix_volser
   Select
     when word(line,1) = "DEFAULTS" then do
       new_card = 1
@@ -1763,7 +1766,8 @@ dsnvalid: Procedure Expose null
   if upp = val_dsn then do
     smsg = msg()
     call msg 'OFF'
-    if sysdsn(val_dsn) = "OK" | sysdsn(val_dsn) = "DATASET NOT FOUND"
+    if sysdsn("'"val_dsn"'") = "OK" | ,
+       sysdsn("'"val_dsn"'") = "DATASET NOT FOUND"
     then retval = 'OK'
     else retval = "NO"
     call msg smsg
