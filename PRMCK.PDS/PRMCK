@@ -1,5 +1,6 @@
-/* ---------------------  rexx procedure  -------------------- *
- * Name:      PRMCK (ParmLib Check)                            *
+/* ---------------------  rexx procedure  -------------------- */
+  _version_ = "2.8 2021-09-28"
+/* Name:      PRMCK (ParmLib Check)                            *
  *                                                             *
  * Function:  Parmlib Member Validation                        *
  *            Support for PROGxx member statements             *
@@ -43,9 +44,11 @@
  * Syntax:    ISPF Edit command PRMCK                          *
  *                                                             *
  * Author:    Lionel B. Dyck                                   *
- *            Internet: lbdyck'gmail.com                       *
+ *            Internet: lbdyck@gmail.com                       *
  *                                                             *
  * History:                                                    *
+ *            09/27/21 - Add PRMCK Message                     *
+ *            09/25/21 - Correct AFTER PROGxx LNKLST check     *
  *            05/14/20 - Correct oversight test volser syms    *
  *                       for PROGxx                            *
  *            03/10/20 - Clean up typos                        *
@@ -126,16 +129,8 @@
  *            09/26/99 - creation                              *
  *                                                             *
  * ----------------------------------------------------------- *
- * Copyright (c) 1999-2020 by Lionel B. Dyck                   *
+ * Copyright (c) 1999-2021 by Lionel B. Dyck                   *
  * ----------------------------------------------------------- */
-  _version_ = "2.0 2018-09-13"
-  _version_ = "2.1 2018-10-01"
-  _version_ = "2.2 2018-10-05"
-  _version_ = "2.3 2018-10-29"
-  _version_ = "2.4 2018-11-02"
-  _version_ = "2.5 2018-11-16"
-  _version_ = "2.6 2020-03-04"
-  _version_ = "2.7 2020-03-10"
 
   _junk_ = sub_init()
 
@@ -329,6 +324,7 @@
     end
     else save_card = card
     line = left(strip(line),72)
+    if pos('( ',line) > 0 then call strip_blanks
     if pos("/*",line) > 0 then call strip_comments
     if length(line) > 0 then call test_card
   end
@@ -346,6 +342,9 @@
 
   if report <> null then
   call do_report "  "
+
+  message = 'z/OS PARMLIB Checker PRMCK' _version_
+  call edline "line_before 1 = msgline '"message"'"
 
   if errors = 0 then errors = "No"
   zedlmsg = "Status:" errors "errors were encountered. "
@@ -594,6 +593,24 @@ Do_Report:
 Strip_comments:
   parse value line with left"/*" . "*/"right
   line = left right
+  return
+
+/* ---------------------------------- *
+ | Remove blanks before ) and after ( |
+ * ---------------------------------- */
+Strip_Blanks:
+  do forever
+     p = pos('( ',line)
+     if p = 0 then leave
+     parse value line with ll'( 'rl
+     line = ll'('rl
+     end
+  do forever
+     p = pos(' )',line)
+     if p = 0 then leave
+     parse value line with ll' )'rl
+     line = ll')'rl
+     end
   return
 
 /* ----------------------------------------------------- *
@@ -922,9 +939,16 @@ Test_LNKLST:
     When keyword = "UPDATE"     then nop
     When keyword = "SMS" then sms = "SMS"
     When left(keyword,6) = "AFTER(" then do
-      parse value keyword with "AFTER(" aftdsn ")"
+      volser = null
+      card = card - 1
+      call test_dsname
+      parse value keyword with "AFTER(" dsname ")"
       if right(keyword,1) <> ")" then
       if word(line,word+1) = ")" then word = word + 1
+      call test_dsname
+      card = card + 1
+      dispmsg = dsname
+      call Disp_Process
     end
     When left(keyword,4) = "JOB(" then nop
     When left(keyword,5) = "ASID(" then nop
@@ -1079,6 +1103,7 @@ Test_Dsname:
   xdsnsave = dsname_save"/"volser
   if type <> "EXIT" then
  /*if wordpos(xdsn,dupdsns) > 0 then do */
+  if pos('AFTER(',keyword) = 0 then
   if wordpos(xdsnsave,dupdsns) > 0 then do
     if nowarn = 1 then return
     parse var xdsnsave 1 xdsnname "/" xdsnvol
@@ -1121,6 +1146,26 @@ Fix_Symdef:
   dsname = newdsn
   return
 
+/* ----------------------------------------------------- *
+ * Fixup volser found with system symbolics              *
+ * ----------------------------------------------------- */
+Fix_volser:
+  if pos('&',volser) = 0 then return
+  parse value volser with . '&' symbol '.' .
+  p1 = pos("&"symbol,volser)
+  p1l = length(symbol)
+  newvoll = left(volser,p1-1)
+  p1r = p1l + p1
+  newvolr = right(volser,length(volser)-p1r)
+  if left(newvolr,2) = ".." then
+  newvolr = substr(newvolr,1)
+  if left(newvolr,1) = "." then
+  newvolr = substr(newvolr,2)
+  newvol = newvoll""mvsvar('symdef',symbol)""newvolr
+  newvol = strip(newvol,'t','.')
+  volser = newvol
+  return
+
  /* ----------------------------------------------------- *
   * Test RACF Status of dataset                           *
   * ----------------------------------------------------- */
@@ -1148,10 +1193,10 @@ Test_DSNDCB:
   return
 
 /* ----------------------------------------------------- *
- * Test existence  of dataset                            *
+ * Test existence of dataset                             *
  * ----------------------------------------------------- */
 Test_DSNVALID:
-  IF listdsi("'"dsname"'") > 0 & sysreason=1 THEN
+  IF listdsi("'"dsname"'") > 0 & sysreason=5 THEN
   call Not_VALID
   return
 
@@ -1211,7 +1256,8 @@ Test_Volume:
     call Not_OnVolume
   end
   else do
-    if wordpos(type,"LNKLST") = 1 then do
+    if wordpos(type,"LNKLST") = 1 then
+      if pos('AFTER(',keyword) = 0 then do
       extents = extents + 1
       if sysused <> 'N/A' Then Do
         if sysextents > 1 then Do
@@ -1234,20 +1280,6 @@ Test_Volume:
   refdate = date('b',refdate,'j')
   today   = date('b')
   if (today - refdate) > 365 then call Long_Time
-  return
-
-/* ----------------------------------------------------- *
- * fixup volser                                          *
- * ----------------------------------------------------- */
-Fix_Volser:
-  if volser = "*MCAT*" then
-  volser = master_vol
-  if left(volser,1) = "&" then do
-    volser = right(volser,length(volser)-1)
-    volser = mvsvar('symdef',volser)
-    if right(volser,1) = "." then
-    volser = left(volser,length(volser)-1)
-  end
   return
 
 /* ----------------------------------------------------- *
@@ -1341,7 +1373,7 @@ Not_Load:
 Not_VALID:
   if nowarn = 1 then return
   rpt_line = "Error:" dsname ,
-    'IS INVALID|'
+    'IS INVALID'
   call edline "line_after" card "= msgline '"rpt_line"'"
   errors = errors + 1
   call flip_line
